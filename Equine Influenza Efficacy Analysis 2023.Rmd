@@ -1,5 +1,5 @@
 ---
-title: "Efficacy Analysis"
+title: "Equine Influenza Efficacy Analysis"
 author: "Olivia Rippee"
 date: "`r Sys.Date()`"
 output: word_document
@@ -718,3 +718,4 @@ ggplot(data_2026_RM_titer_incidence_5day,
     plot.subtitle = element_text(size = 10))
 
 ```
+
