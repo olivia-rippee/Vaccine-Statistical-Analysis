@@ -1,5 +1,5 @@
 ---
-title: "Equine Influenza Efficacy Analysis"
+title: "Equine Influenza Efficacy 2026"
 author: "Olivia Rippee"
 date: "`r Sys.Date()`"
 output: word_document
@@ -38,10 +38,7 @@ format_integer <- function(x) {
 
 ```{r data}
 
-data_2026 <- read.csv("your_efficacy_data_file.csv")
-  
-# Data cleaning that will vary based on input file and desired outcomes
-# ---------------------------------------------------------------------
+data_2026 <- read.csv("your_efficacy_repeated_data.csv")
 colnames(data_2026) <- gsub("\\.", "_", colnames(data_2026)) 
 
 data_2026 <- data_2026 %>% 
@@ -718,5 +715,3 @@ ggplot(data_2026_RM_titer_incidence_5day,
     plot.subtitle = element_text(size = 10))
 
 ```
-
-

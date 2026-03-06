@@ -1,0 +1,174 @@
+---
+title: "Efficacy Titer Modeling"
+author: "Olivia Rippee"
+date: "`r Sys.Date()`"
+output: word_document
+---
+
+## Kentucky: Modeling
+
+```{r HAI titer Kentucky modeling}
+
+# Logistic Regression (GLM)
+# --------------------------
+model_glm <- glm(Kentucky_Pos ~ Group * Day,
+                 data = data_2026_KY_titer_incidence_5day,
+                 family = binomial)
+
+summary(model_glm)
+anova(model_glm, test = "Chisq")
+```
+
+\pagebreak
+
+## Kentucky: Estimated Marginal Means
+
+```{r HAI titer Kentucky emm, eval=FALSE}
+
+#  Estimated Marginal Means (Predicted Probabilities)
+# ----------------------------------------------------
+emm_all <- emmeans(model_glm,
+                   ~ Group | Day,
+                   type = "response")
+
+print(emm_all)
+```
+
+\pagebreak
+
+## Kentucky: Identify the Day Control Horses Seroconverted
+
+```{r HAI titer Kentucky seroconversion}
+
+emm_control <- emmeans(model_glm,
+                       ~ Day | Group,
+                       at = list(Group = "Control"),
+                       type = "response")
+
+control_comparisons <- pairs(emm_control, adjust = "tukey")
+
+print(emm_control)
+print(control_comparisons)
+
+```
+
+\pagebreak
+
+## Kentucky: Demonstrate IVP Remained Seronegative
+
+```{r HAI titer Kentucky IVP seronegative}
+
+emm_ivp <- emmeans(model_glm,
+                   ~ Day | Group,
+                   at = list(Group = "IVP"),
+                   type = "response")
+
+ivp_comparisons <- pairs(emm_ivp, adjust = "tukey")
+
+print(emm_ivp)
+print(ivp_comparisons)
+```
+
+\pagebreak
+
+## Kentucky: Demonstrate Both Groups Were Seronegative at Day 0
+
+```{r HAI titer Kentucky seronegative day 0}
+
+emm_day0 <- emmeans(model_glm,
+                    ~ Group | Day,
+                    at = list(Day = "0"),
+                    type = "response")
+
+baseline_comparison <- pairs(emm_day0)
+
+print(emm_day0)
+print(baseline_comparison)
+
+```
+
+\pagebreak
+
+## Richmond: Modeling
+
+```{r HAI titer Richmond modeling}
+
+# Logistic Regression (GLM)
+# --------------------------
+model_glm <- glm(Richmond_Pos ~ Group * Day,
+                 data = data_2026_RM_titer_incidence_5day,
+                 family = binomial)
+
+summary(model_glm)
+anova(model_glm, test = "Chisq")
+
+```
+
+\pagebreak
+
+## Richmond: Estimated Marginal Means
+
+```{r HAI titer Richmond emm}
+
+#  Estimated Marginal Means (Predicted Probabilities)
+# ----------------------------------------------------
+emm_all <- emmeans(model_glm,
+                   ~ Group | Day,
+                   type = "response")
+
+print(emm_all)
+
+```
+
+\pagebreak
+
+## Richmond: Identify the Day Control Horses Seroconverted
+
+```{r HAI titer Richmond control seroconversion}
+
+emm_control <- emmeans(model_glm,
+                       ~ Day | Group,
+                       at = list(Group = "Control"),
+                       type = "response")
+
+control_comparisons <- pairs(emm_control, adjust = "tukey")
+
+print(emm_control)
+print(control_comparisons)
+```
+
+\pagebreak
+
+## Richmond: Demonstrate IVP Remained Seronegative
+
+```{r HAI titer Richmond IVP seronegative}
+
+emm_ivp <- emmeans(model_glm,
+                   ~ Day | Group,
+                   at = list(Group = "IVP"),
+                   type = "response")
+
+ivp_comparisons <- pairs(emm_ivp, adjust = "tukey")
+
+print(emm_ivp)
+print(ivp_comparisons)
+```
+
+\pagebreak
+
+## Richmond: Demonstrate Both Groups Were Seronegative at Day 0
+
+```{r HAI titer Richmond seronegative day 0}
+
+emm_day0 <- emmeans(model_glm,
+                    ~ Group | Day,
+                    at = list(Day = "0"),
+                    type = "response")
+
+baseline_comparison <- pairs(emm_day0)
+
+print(emm_day0)
+print(baseline_comparison)
+
+```
+ 

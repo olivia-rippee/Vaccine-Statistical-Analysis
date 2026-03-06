@@ -1,0 +1,115 @@
+---
+title: "Efficacy"
+output: word_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(tidyverse)
+library(janitor)
+#library(devtools)
+#devtools::install_github("ABS-dev/MF")
+library(MF)
+library(flextable)
+library(officer)
+library(ggplot2)
+```
+
+
+```{r data}
+
+# Load in data and fix columns
+# -----------------------------
+data <- read.csv("your_efficacy_repeated_data.csv")
+colnames(data) <- gsub("\\.", "_", colnames(data)) 
+data <- data %>% 
+  rename_with(~ gsub("_", "", .), .cols = Halter_) %>%
+  mutate(Group = case_when(
+    Group == 1 ~ "IVP",
+    Group == 2 ~ "Control")) %>%
+  filter(!is.na(Halter))
+
+
+# Calculate duration
+# -------------------
+data_duration <- data %>%
+  arrange(Halter, Day) %>%
+  group_by(Halter) %>%
+  mutate(
+    DOC_day  = max(Day[Study_Day == "DOC"], na.rm = TRUE),
+    
+    # first positive day after DOC (or NA if none)
+    StartDay = {
+      pos_days <- Day[VI_PCR == "Pos" & Day > DOC_day]
+      if(length(pos_days) > 0) min(pos_days) else NA_real_},
+    
+    # last positive day after DOC (or NA if none)
+    EndDay = {
+      pos_days <- Day[VI_PCR == "Pos" & Day > DOC_day]
+      if(length(pos_days) > 0) max(pos_days) else NA_real_},
+    
+    Duration = ifelse(!is.na(StartDay) & !is.na(EndDay),
+                      EndDay - StartDay + 1,
+                      0)) %>%
+  ungroup()
+
+# Verify that duration is calculated correctly
+# test <- data_duration[, c("Halter", "Day", "VI_PCR", "Duration")]
+
+
+# Trim dataset to 1 entry per horse
+# ----------------------------------
+data_duration_individual <- data_duration %>% 
+  group_by(Halter) %>%
+  slice_tail(n = 1) %>%  # keeps the last row per Halter
+  ungroup()
+
+```
+
+
+```{r MF}
+
+# Calculate mitigated fraction and confidence interval
+mf_boot <- MFBoot('Duration ~ Group', data_duration_individual, compare = c("Control", "IVP"))
+
+# Descriptive statistics
+summary_table <- data_duration_individual %>%
+  group_by(Group) %>%
+  summarise(
+    n = n(),
+    Minimum = min(Duration, na.rm = TRUE),
+    `25th Percentile` = quantile(Duration, 0.25, na.rm = TRUE),
+    Median = median(Duration, na.rm = TRUE),
+    `75th Percentile` = quantile(Duration, 0.75, na.rm = TRUE),
+    Maximum = max(Duration, na.rm = TRUE),
+    .groups = "drop") %>%
+  mutate(
+    `Mitigated Fraction` = round(mf_boot$stat[1,1], 2),          # point estimate
+    `Lower 95% Confidence Bound` = round(mf_boot$stat[1,3], 2),  # lower bound
+    `Mitigated Fraction` = ifelse(row_number() == 2, NA, `Mitigated Fraction`),
+    `Lower 95% Confidence Bound` = ifelse(row_number() == 2, NA, `Lower 95% Confidence Bound`))
+
+# Create flextable
+flextable(summary_table) %>%
+  autofit() %>%
+  set_caption("Summary of Duration by Treatment Group")
+
+# Boxplot
+ggplot(data_duration_individual, aes(y = Group, x = Duration, fill = Group)) +
+  geom_boxplot(width = 0.6) +
+  geom_jitter(height = 0.15, alpha = 0.7, size = 2) +
+  theme_minimal() +
+  labs(
+    title = "Disease Duration by Treatment Group",
+    subtitle = paste0(
+      "Mitigated Fraction = ", round(mf_boot$stat[1,1], 2),
+      ", Lower 95% CI = ", round(mf_boot$stat[1,3], 2)),
+    x = "Duration", y = "Group") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 12))
+
+```
+
