@@ -1,0 +1,587 @@
+
+options nonumber nodate ls = 92;
+
+PROC IMPORT OUT= WORK.Nasal
+            DATAFILE= "D:\consulting\Hennessy Research\2023-HRA-influenza-01\Nasal Scores.csv"
+            DBMS=CSV REPLACE;
+     GETNAMES=YES;
+     DATAROW=2; 
+     GUESSINGROWS=100; 
+Proc sort;
+	by horse_id;
+proc print;
+RUN;
+
+
+PROC IMPORT OUT= WORK.ocular
+            DATAFILE= "D:\consulting\Hennessy Research\2023-HRA-influenza-01\Ocular Scores.csv"
+            DBMS=CSV REPLACE;
+     GETNAMES=YES;
+     DATAROW=2; 
+     GUESSINGROWS=100; 
+	 Proc sort;
+	 	by horse_id;
+	 proc print;
+RUN;
+
+
+PROC IMPORT OUT= WORK.PCRVI
+            DATAFILE= "D:\consulting\Hennessy Research\2023-HRA-influenza-01\PCR VI.csv"
+            DBMS=CSV REPLACE;
+     GETNAMES=YES;
+     DATAROW=2; 
+     GUESSINGROWS=100; 
+	 Proc sort;
+	 	by horse_id;
+	 proc print;
+RUN;
+
+
+PROC IMPORT OUT= WORK.temp
+            DATAFILE= "D:\consulting\Hennessy Research\2023-HRA-influenza-01\temperature.csv"
+            DBMS=CSV REPLACE;
+     GETNAMES=YES;
+     DATAROW=2; 
+     GUESSINGROWS=100; 
+	 proc print;
+RUN;
+
+
+
+PROC IMPORT OUT= WORK.kentucky
+            DATAFILE= "D:\consulting\Hennessy Research\2023-HRA-influenza-01\Kentucky HAI.csv"
+            DBMS=CSV REPLACE;
+     GETNAMES=YES;
+     DATAROW=2; 
+     GUESSINGROWS=100; 
+	 proc print;
+RUN;
+
+
+PROC IMPORT OUT= WORK.Richmond
+            DATAFILE= "D:\consulting\Hennessy Research\2023-HRA-influenza-01\Richmond HAI.csv"
+            DBMS=CSV REPLACE;
+     GETNAMES=YES;
+     DATAROW=2; 
+     GUESSINGROWS=100; 
+	 proc print;
+RUN;
+
+
+
+Title1 'Assessment of Primary Variable - Cases';
+
+proc transpose data = nasal out = nasal1 (rename = (col1 = Nasal));
+	by horse_id trt_group;
+	var DOC
+		DOC1
+		DOC2
+		DOC3
+		DOC4
+		DOC5
+		DOC6
+		DOC7
+		DOC8
+		DOC9
+		DOC10
+		DOC11
+		DOC12
+		DOC13
+		DOC14;
+	proc sort;
+	by horse_id trt_group _NAME_;
+	proc print;
+	run;
+
+
+proc transpose data = ocular out = ocular1 (rename = (col1 = ocular));
+	by horse_id trt_group;
+	var DOC
+		DOC1
+		DOC2
+		DOC3
+		DOC4
+		DOC5
+		DOC6
+		DOC7
+		DOC8
+		DOC9
+		DOC10
+		DOC11
+		DOC12
+		DOC13
+		DOC14;
+	proc sort;
+	by horse_id trt_group _NAME_;
+	proc print;
+	run;
+
+data cases1;
+	merge nasal1 ocular1;
+	by horse_id trt_group _NAME_;
+	if (nasal > 1 or ocular > 1) then case = 1;
+	if (nasal <= 1 and ocular <= 1) then case = 0;
+	proc sort;
+		by horse_id descending case;
+	proc print;
+	run;
+
+data cases2;
+	set cases1;
+	by horse_id notsorted;
+	if first.horse_id;
+	proc print;
+	run;
+
+data cases3;
+	set cases2;
+
+	if TRT_Group = 'Vaccinate' then trt = 1;
+	if TRT_Group = 'control' then trt = 2;
+
+	proc sort;
+	by trt;
+
+	proc print;
+	run;
+
+
+ods output RelativeRisks = risk1;
+proc freq data = cases3;
+		table trt*(case);
+		exact relrisk;
+		run;
+
+ods rtf;
+
+	data risk1a;
+		set risk1;
+		where studytype in ('Cohort (Col2 Risk)');
+
+		PF = 1 - value;
+		LB = 1 - uppercl;
+		UB = 1 - lowercl;
+
+		proc print;
+		run;
+
+ods rtf close;
+
+
+Title1 'Duration of Disease - Cases';
+
+data duration1;
+	set cases1;
+
+	DPC1 = substrn(_NAME_, 4, 2);
+	if DPC1 = '' then DPC1 = '0';
+
+	DPC = DPC1 + 0;
+
+	if case = 0 then delete;
+
+	proc sort;
+		by horse_id DPC;
+		
+	proc print;
+	run;
+
+data duration2;
+	set duration1;
+	by horse_id notsorted;
+	if first.horse_id;
+	proc print;
+	run;
+
+data first;
+	set duration2;
+	first_day = DPC;
+	keep horse_id first_day;
+	proc print;
+	run;
+
+
+data duration3;
+	set duration1;
+	by horse_id notsorted;
+	if last.horse_id;
+	proc print;
+	run;
+
+data last;
+	set duration3;
+	last_day = DPC;
+	keep horse_id trt_group last_day;
+	proc print;
+	run;
+
+data duration4;
+	merge first last;
+	by horse_id;
+	duration = 1+(last_day - first_day);
+	proc sort;
+		by horse_id;
+	proc print;
+	run;
+
+data duration5;
+	set cases1;
+	if _NAME_ = 'DOC';
+	keep horse_id trt_group;
+	proc sort;
+	by horse_id;
+	proc print;
+	run;
+
+data duration6;
+	merge duration5 duration4;
+	by horse_id;
+	if duration = . then duration = 0;
+	if trt_group = 'control' then trt = 'B'; *control;
+	if trt_group = 'Vaccinate' then trt = 'A'; *vaccinate;
+	proc print;
+	run;
+
+
+		proc rank data=duration6 out=duration7 ties=mean;
+			ranks rank;
+			var duration;
+		*proc print;
+		run;
+
+		proc npar1way data = duration7 wilcoxon;
+		class trt;
+		var duration;
+		run; 
+
+		proc freq data=duration7 noprint;
+		tables trt*rank/out=out1 sparse;
+		run;
+		
+		proc sort data=out1;
+			by rank trt;
+			*proc print;
+		run;
+
+		proc freq data=out1;
+		weight count;
+		tables rank*trt/measures norow nocol;
+		test smdrc; 
+		output out=zout smdrc ;
+		run;
+	
+**Summary Tables;
+
+ods rtf;
+
+proc sort data = duration6;
+	by trt_group;
+	proc print;
+	run;
+
+proc means data = duration6 noprint;
+	by trt_group;
+	var duration;
+	output out = sum1 min(duration) = min
+					  p25(duration) = P25
+					  p50(duration) = p50
+					  p75(duration) = p75
+					  max(duration) = max;
+	proc print;
+	run;
+
+proc univariate data = duration6;
+	by trt_group;
+	var duration;
+	run;
+
+
+
+ods rtf close;
+
+
+Title1 'Duration of Shedding - Cases';
+
+proc sort data = pcrvi;
+	by horse_id trt_group;
+	run;
+
+proc transpose data = pcrvi out = pcrvi2;
+	by horse_id trt_group;
+	var DOC
+		DOC1
+		DOC2
+		DOC3
+		DOC4
+		DOC5
+		DOC6
+		DOC7
+		DOC8
+		DOC9
+		DOC10
+		DOC11
+		DOC12
+		DOC13
+		DOC14;
+	proc sort;
+	by horse_id trt_group _NAME_;
+	proc print;
+	run;
+
+
+
+data shedding1;
+	set PCRVI2;
+
+	DPC1 = substrn(_NAME_, 4, 2);
+	if DPC1 = '' then DPC1 = '0';
+
+	DPC = DPC1 + 0;
+
+	if Col1 = 'Neg' the col2 = 0;
+	if col1 = 'Pos' then col2 = 1;
+
+	if col2 = 1;
+
+
+	proc sort;
+		by horse_id DPC;
+		
+	proc print;
+	run;
+
+data shedding2;
+	set shedding1;
+	by horse_id notsorted;
+	if first.horse_id;
+	proc print;
+	run;
+
+data first;
+	set shedding2;
+	first_day = DPC;
+	keep horse_id first_day;
+	proc print;
+	run;
+
+
+data shedding3;
+	set shedding1;
+	by horse_id notsorted;
+	if last.horse_id;
+	proc print;
+	run;
+
+data last;
+	set shedding3;
+	last_day = DPC;
+	keep horse_id trt_group last_day;
+	proc print;
+	run;
+
+data shedding4;
+	merge first last;
+	by horse_id;
+	duration = 1+(last_day - first_day);
+	proc sort;
+		by horse_id;
+	proc print;
+	run;
+
+data shedding5;
+	set cases1;
+	if _NAME_ = 'DOC';
+	keep horse_id trt_group;
+	proc sort;
+	by horse_id;
+	proc print;
+	run;
+
+data shedding6;
+	merge shedding5 shedding4;
+	by horse_id;
+	if duration = . then duration = 0;
+	if trt_group = 'control' then trt = 'B'; *control;
+	if trt_group = 'Vaccinate' then trt = 'A'; *vaccinate;
+	proc print;
+	run;
+
+
+		proc rank data=shedding6 out=shedding7 ties=mean;
+			ranks rank;
+			var duration;
+		*proc print;
+		run;
+
+		proc npar1way data = shedding7 wilcoxon;
+		class trt;
+		var duration;
+		run; 
+
+		proc freq data=shedding7 noprint;
+		tables trt*rank/out=out1 sparse;
+		run;
+		
+		proc sort data=out1;
+			by rank trt;
+			*proc print;
+		run;
+
+		proc freq data=out1;
+		weight count;
+		tables rank*trt/measures norow nocol;
+		test smdrc; 
+		output out=zout smdrc ;
+		run;
+	
+**Summary Tables;
+
+ods rtf;
+
+proc sort data = shedding6;
+	by trt_group;
+	*proc print;
+	run;
+
+proc means data = shedding6 noprint;
+	by trt_group;
+	var duration;
+	output out = sum1 min(duration) = min
+					  p25(duration) = P25
+					  p50(duration) = p50
+					  p75(duration) = p75
+					  max(duration) = max;
+	proc print;
+	run;
+
+ods rtf close;
+
+
+
+**Pyrexia;
+
+Title1 'Pyrexia';
+
+proc sort data = temp;
+	by halter_id trt_group;
+	proc print;
+	run;
+
+proc transpose data = temp out = temp1;
+	by halter_id trt_group;
+	var DOC
+		DOC1
+		DOC2
+		DOC3
+		DOC4
+		DOC5
+		DOC6
+		DOC7
+		DOC8
+		DOC9
+		DOC10
+		DOC11
+		DOC12
+		DOC13
+		DOC14;
+	proc sort;
+	by halter_id trt_group _NAME_;
+	proc print;
+	run;
+
+data temp2;
+	set temp1;
+	temp = col1 + 0;
+
+	if temp ge 102.5 then pyrexia = 1;
+	if temp < 102.5 then pyrexia = 0;
+
+	proc print;
+	run;
+
+proc means data = temp2 noprint;
+	by halter_id trt_group;
+	var pyrexia;
+	output out = temp3 sum(pyrexia) = days_pyrexic;
+	proc print;
+	run;
+
+data temp4;
+	set temp3;
+	if days_pyrexic > 0 then pyr = 1;
+	if days_pyrexic = 0 then pyr = 0;
+	proc print;
+	run;
+
+proc freq data = temp4;
+	tables pyr*trt_group;
+	exact fisher;
+	run;
+
+
+
+**Kentucky HAI;
+
+Title1 'Kentucky HAI';
+
+data kentucky1;
+	set kentucky;
+	proc sort;
+		by halter trt_group;
+	proc print;
+	run;
+
+proc transpose data = kentucky1 out = kentucky2;
+	by halter trt_group;
+	var Bled__20Sep23  Bled__11Oct23  Bled__25Oct23  Bled__01Nov23  Bled__08Nov23;
+	proc print;
+	run;
+
+data kentucky3;
+	set kentucky2;
+	if col1 = '<2' then HAI = 'Neg';
+	if col1 ne '<2' then HAI = 'Pos';
+	proc sort;
+		by _NAME_;
+	proc print;
+	run;
+
+proc freq data = kentucky3;
+	by _NAME_;
+	tables trt_group*HAI;
+	exact fisher;
+	run;
+
+
+
+
+	
+**Richmond HAI;
+
+data Richmond1;
+	set Richmond;
+	proc sort;
+		by halter trt_group;
+	proc print;
+	run;
+
+proc transpose data = Richmond1 out = Richmond2;
+	by halter trt_group;
+	var Bled__20Sep23  Bled__11Oct23  Bled__25Oct23  Bled__01Nov23  Bled__08Nov23;
+	proc print;
+	run;
+
+data Richmond3;
+	set Richmond2;
+	if col1 = '<2' then HAI = 'Neg';
+	if col1 ne '<2' then HAI = 'Pos';
+	proc sort;
+		by _NAME_;
+	proc print;
+	run;
+
+proc freq data = Richmond3;
+	by _NAME_;
+	tables trt_group*HAI;
+	exact fisher;
+	run;
