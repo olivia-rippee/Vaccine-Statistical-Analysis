@@ -1,0 +1,160 @@
+---
+title: "BVD2 Efficacy (2024 Individual Data)"
+author: "Olivia Rippee"
+date: "`r Sys.Date()`"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE)
+
+library(tidyverse)
+library(readxl)
+library(epitools)
+library(flextable)
+```
+
+```{r data}
+
+individual_data <- read.csv("your_individual_data.csv") 
+
+individual_data <-  na.omit(individual_data) %>%
+  mutate(group = recode(group, `1` = "Control", `2` = "Vaccine"))
+
+```
+
+```{r fxn}
+
+# P-value formatting function
+format_p <- function(p) {
+  if (is.na(p)) return(NA_character_)
+  if (p < 0.0001) {
+    output <- "< 0.0001"
+  } else {output <- sprintf("%.4f", p)}}
+
+# 5-number summary formatting function
+format_integer <- function(x) {
+  ifelse(x %% 1 == 0,
+    formatC(x, format = "f", digits = 0),
+    formatC(x, format = "f", digits = 2))}
+
+```
+
+# Mortality
+
+```{r mortality}
+
+summary_counts <- individual_data %>%
+  group_by(group) %>%
+  summarize(
+    Positive = sum(toupper(mortality) == "YES"),
+    Total = n(),
+    Prop = Positive / Total,
+    .groups = "drop")
+
+# Create 2x2 contingency table
+ct <- table(individual_data$group, individual_data$mortality)
+
+# Relative risk with bootstrap CI
+RR_result <- riskratio(ct, method = "boot")
+
+RR_estimate <- RR_result$measure[, "estimate"]
+RR_lower    <- RR_result$measure[, "lower"]
+RR_upper    <- RR_result$measure[, "upper"]
+fisher_p    <- RR_result$p.value[, "fisher.exact"]
+
+# Extract vaccine prevented fraction (assuming Vaccine is 2nd row)
+PF_vac       <- 1 - RR_estimate[2]
+Lower_CI_vac <- ifelse(PF_vac == 1, "Not estimable", 1 - RR_upper[2])
+
+# Create final summary table
+summary_table <- summary_counts %>%
+  arrange(group) %>%
+  mutate(
+    `Treatment Group` = ifelse(group == "Control", "1 = Control", "2 = Vaccine"),
+    `Proportion of Mortality` =
+      paste0(Positive, " / ", Total, " = ", sprintf("%.2f", Prop)),
+    `Prevented Fraction` =
+      ifelse(group == "Control", sprintf("%.2f", PF_vac), ""),
+    `Lower 95% Confidence Bound` =
+      ifelse(group == "Control",
+          ifelse(!is.na(suppressWarnings(as.numeric(Lower_CI_vac))),
+                  sprintf("%.2f", as.numeric(Lower_CI_vac)), Lower_CI_vac), ""),
+    `Fisher Exact p-value` = ifelse(group == "Control", format_p(fisher_p[2]), "")) %>%
+  select(
+    `Treatment Group`,
+    `Proportion of Mortality`,
+    `Prevented Fraction`,
+    `Lower 95% Confidence Bound`,
+    `Fisher Exact p-value`)
+
+# Create flextable
+flextable(summary_table) %>%
+  set_caption("Incidence of Mortality") %>%
+  autofit() %>%
+  align(align = "center", part = "all") %>%
+  fit_to_width(max_width = 7) %>% 
+  fontsize(size = 11, part = "all")
+
+
+```
+
+<br>
+
+# Leukopenia
+
+```{r leukopenia}
+
+summary_counts <- individual_data %>%
+  group_by(group) %>%
+  summarize(
+    Positive = sum(toupper(leukopenia) == "YES"),
+    Total = n(),
+    Prop = Positive / Total,
+    .groups = "drop")
+
+# Create 2x2 contingency table
+ct <- table(individual_data$group, individual_data$leukopenia)
+
+# Relative risk with bootstrap CI
+RR_result <- riskratio(ct, method = "boot")
+
+RR_estimate <- RR_result$measure[, "estimate"]
+RR_lower    <- RR_result$measure[, "lower"]
+RR_upper    <- RR_result$measure[, "upper"]
+fisher_p    <- RR_result$p.value[, "fisher.exact"]
+
+# Extract vaccine prevented fraction (assuming Vaccine is 2nd row)
+PF_vac       <- 1 - RR_estimate[2]
+Lower_CI_vac <- ifelse(PF_vac == 1, "Not estimable", 1 - RR_upper[2])
+
+# Create final summary table
+summary_table <- summary_counts %>%
+  arrange(group) %>%
+  mutate(
+    `Treatment Group` = ifelse(group == "Control", "1 = Control", "2 = Vaccine"),
+    `Proportion of Positive Cases` =
+      paste0(Positive, " / ", Total, " = ", sprintf("%.2f", Prop)),
+    `Prevented Fraction` =
+      ifelse(group == "Control", sprintf("%.2f", PF_vac), ""),
+    `Lower 95% Confidence Bound` =
+      ifelse(group == "Control",
+          ifelse(!is.na(suppressWarnings(as.numeric(Lower_CI_vac))),
+                  sprintf("%.2f", as.numeric(Lower_CI_vac)), Lower_CI_vac), ""),
+    `Fisher Exact p-value` = ifelse(group == "Control", format_p(fisher_p[2]), "")) %>%
+  select(
+    `Treatment Group`,
+    `Proportion of Positive Cases`,
+    `Prevented Fraction`,
+    `Lower 95% Confidence Bound`,
+    `Fisher Exact p-value`)
+
+# Create flextable
+flextable(summary_table) %>%
+  set_caption("Incidence of Leukopenia") %>%
+  autofit() %>%
+  align(align = "center", part = "all") %>%
+  fit_to_width(max_width = 7) %>% 
+  fontsize(size = 11, part = "all")
+
+```

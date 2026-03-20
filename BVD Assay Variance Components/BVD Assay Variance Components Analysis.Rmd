@@ -1,0 +1,474 @@
+---
+title: "BVD Antiserum Variance Components Analysis"
+author: "Olivia Rippee"
+date: "`r Sys.Date()`"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE)
+library(tidyverse)
+library(lme4)
+library(flextable)
+library(officer)
+library(ggplot2)
+```
+
+```{r data}
+
+bvdv1_data <- read.csv("your_VarCompData_BVDV1.csv")
+
+bvdv2_data <- read.csv("your_VarCompData_BVDV2.csv")
+
+
+# Calculate real test day (1-3 repeating) and 
+# create Serial_Day factor for plotting
+# ---------------------------------------------
+bvdv1_data <- bvdv1_data %>%
+  arrange(prepid, testday) %>%
+  mutate(
+    # Extract day from testID (3rd and 4th characters)
+    real_test_day = toupper(substr(testID, 3, 4)),
+    real_test_day = case_when(
+      real_test_day == "D1" ~ "D1",
+      real_test_day == "D2" ~ "D2",
+      real_test_day == "D3" ~ "D3",
+      TRUE ~ NA_character_),
+    Serial = sub(".*-", "", sample),
+    Serial_Day = factor(paste(Serial, real_test_day),
+      levels = c("B6 D1","B6 D2","B6 D3","B5 D1","B5 D2","B5 D3")),
+    operator = as.character(operator))
+
+bvdv2_data <- bvdv2_data %>%
+  arrange(prepid, testday) %>%
+  mutate(
+    real_test_day = toupper(substr(testID, 3, 4)),
+    real_test_day = case_when(
+      real_test_day == "D1" ~ "D1",
+      real_test_day == "D2" ~ "D2",
+      real_test_day == "D3" ~ "D3",
+      TRUE ~ NA_character_),
+    Serial = sub(".*-", "", sample),
+    Serial_Day = factor(paste(Serial, real_test_day),
+      levels = c("B6 D1","B6 D2","B6 D3","B5 D1","B5 D2","B5 D3")),
+    operator = as.character(operator))
+
+```
+
+
+```{r fxn}
+
+# Variance analysis by antiserum (assay)
+# ----------------------------------------
+antiserum_variance_analysis <- function(data, titer_column){
+  antisera <- c("proposed","legacy")
+  results <- data.frame()
+  
+  for(a in antisera){
+    subset_data <- data %>% filter(antiserum == a)
+    
+    model <- lmer(as.formula(paste(titer_column, "~ (1|Oper_Day)")), data = subset_data)
+    var_comp <- as.data.frame(VarCorr(model))
+    
+    var_between <- var_comp$vcov[var_comp$grp=="Oper_Day"]
+    var_within  <- var_comp$vcov[var_comp$grp=="Residual"]
+    overall_mean <- mean(subset_data[[titer_column]], na.rm=TRUE)
+    
+    results <- rbind(results,
+      data.frame(
+        Antiserum = a,
+        Variance_Between = var_between,
+        Variance_Within  = var_within,
+        Sum_Variance     = var_between + var_within,
+        Var_Mean_6       = var_between + var_within/6,
+        Overall_Mean     = overall_mean))}
+  
+  proposed <- results %>% filter(Antiserum=="proposed")
+  legacy  <- results %>% filter(Antiserum=="legacy")
+  
+  results <- results %>%
+    mutate(
+      Variance_Ratio = ifelse(Antiserum=="proposed", proposed$Sum_Variance / legacy$Sum_Variance, NA_real_),
+      Shift_Means    = ifelse(Antiserum=="proposed", proposed$Overall_Mean - legacy$Overall_Mean, NA_real_),
+      Antiserum      = str_to_title(Antiserum)) %>%
+    select(Antiserum, Variance_Between, Variance_Within, Sum_Variance,
+           Variance_Ratio, Var_Mean_6, Overall_Mean, Shift_Means)
+  
+  results}
+
+
+# Variance analysis by antiserum (assay) and serial
+# --------------------------------------------------
+serum_antiserum_variance_analysis <- function(data, titer_column){
+  serials <- unique(data$sample)
+  antisera <- c("proposed","legacy")
+  results <- data.frame()
+
+  for(s in serials){
+    for(a in antisera){
+      subset_data <- data %>%
+        filter(sample == s, antiserum == a)
+
+      model <- lmer(as.formula(paste(titer_column,"~ (1|Oper_Day)")),
+                    data = subset_data)
+
+      var_comp <- as.data.frame(VarCorr(model))
+
+      var_between <- var_comp$vcov[var_comp$grp=="Oper_Day"]
+      var_within  <- var_comp$vcov[var_comp$grp=="Residual"]
+      overall_mean <- mean(subset_data[[titer_column]], na.rm=TRUE)
+
+      results <- rbind(results,
+        data.frame(
+          Serial = s,
+          Antiserum = a,
+          Variance_Between = var_between,
+          Variance_Within = var_within,
+          Sum_Variance = var_between + var_within,
+          Var_Mean_6 = var_between + var_within/6,
+          Overall_Mean = overall_mean))}}
+
+  final <- lapply(unique(results$Serial), function(s) {
+    proposed <- results %>% filter(Serial == s, Antiserum == "proposed")
+    legacy  <- results %>% filter(Serial == s, Antiserum == "legacy")
+
+    variance_ratio <- proposed$Sum_Variance / legacy$Sum_Variance
+    shift_means    <- proposed$Overall_Mean - legacy$Overall_Mean
+
+    proposed_row <- proposed %>%
+      mutate(
+        Label = paste(sub(".*-","",Serial), "Proposed"),
+        Variance_Ratio = variance_ratio,
+        Shift_Means = shift_means)
+
+    legacy_row <- legacy %>%
+      mutate(
+        Label = paste(sub(".*-","",Serial), "Legacy"),
+        Variance_Ratio = NA_real_,
+        Shift_Means    = NA_real_)
+
+    bind_rows(proposed_row, legacy_row)}) %>%
+  
+    bind_rows() %>%
+    select(Serial, Antiserum, Label,
+       Variance_Between, Variance_Within, Sum_Variance,
+       Variance_Ratio, Var_Mean_6, Overall_Mean, Shift_Means) %>%
+    mutate(across(where(is.numeric), as.numeric))
+
+  final}
+
+
+# Var comp flextable formatting
+# ------------------------------
+format_variance_components_table <- function(data, 
+  label_type = c("serial_antiserum", "antiserum")) {
+  
+  label_type <- match.arg(label_type)
+  
+  if (label_type == "antiserum") {
+    data <- data %>%
+      mutate(Label = Antiserum) %>%
+      select(Label, Variance_Between, Variance_Within, Sum_Variance,
+             Variance_Ratio, Var_Mean_6, Overall_Mean, Shift_Means)
+    label_name <- "Antiserum"
+    
+  } else {
+    data <- data %>%
+      select(Label, Variance_Between, Variance_Within, Sum_Variance,
+             Variance_Ratio, Var_Mean_6, Overall_Mean, Shift_Means)
+    label_name <- "Serial / Antiserum"}
+  
+  data %>%
+    mutate(
+      across(c(Variance_Between, Variance_Within, Sum_Variance,
+               Variance_Ratio, Var_Mean_6), ~ round(., 4)),
+      across(c(Overall_Mean, Shift_Means), ~ round(., 2))) %>%
+    flextable() %>%
+    set_header_labels(
+      Label = label_name,
+      Variance_Between = "Variance Between",
+      Variance_Within = "Variance Within",
+      Sum_Variance = "Sum of Between & Within Variances",
+      Variance_Ratio = "Variance Ratio",
+      Var_Mean_6 = "Variance of Mean of 6 Vials",
+      Overall_Mean = "Overall Mean",
+      Shift_Means = "Shift in Means") %>%
+    colformat_num(
+      j = c("Variance_Between","Variance_Within","Sum_Variance",
+            "Variance_Ratio","Var_Mean_6"), digits = 4) %>%
+    colformat_num(
+      j = c("Overall_Mean","Shift_Means"), digits = 2) %>%
+    fontsize(size = 11, part = "all") %>%
+    align(j = 1, align = "left", part = "all") %>%
+    align(j = 2:8, align = "center", part = "all") %>%
+    width(j = 1, width = 1.05) %>%
+    width(j = 2:4, width = 1) %>%
+    width(j = 5, width = 0.75) %>%
+    width(j = 6:8, width = 0.75) %>%
+    set_table_properties(layout = "fixed")}
+
+
+# F-test comparison table
+# ------------------------
+F_test_table <- function(data, results, titer_column, alpha = 0.05){
+  serials <- unique(results$Serial)
+  f_table <- lapply(serials, function(s){
+
+    proposed <- results %>% filter(Serial == s, Antiserum == "proposed")
+    legacy  <- results %>% filter(Serial == s, Antiserum == "legacy")
+  
+    subset_data <- data %>% filter(sample == s)
+
+    n_proposed <- subset_data %>% filter(antiserum=="proposed") %>% nrow()
+    n_legacy  <- subset_data %>% filter(antiserum=="legacy") %>% nrow()
+
+    df1 <- n_proposed - 1
+    df2 <- n_legacy - 1
+
+    var_ratio <- proposed$Sum_Variance / legacy$Sum_Variance
+    f_crit <- qf(1 - alpha, df1, df2)
+
+    decision <- ifelse(var_ratio <= f_crit, "Pass", "Fail")
+
+    data.frame(
+      Serial = sub(".*-","", s),
+      Variance_Ratio = var_ratio,
+      F_Critical = f_crit,
+      DF1 = df1,
+      DF2 = df2,
+      Decision = decision)}) %>% bind_rows()
+
+  f_table}
+
+
+# F-test flextable formatting
+# ------------------------------
+format_F_table <- function(data) {
+  data %>%
+    mutate(across(c(Variance_Ratio, F_Critical), ~ round(., 4))) %>%
+    flextable() %>%
+    set_header_labels(
+      Serial = "Serial",
+      Variance_Ratio = "Variance Ratio",
+      F_Critical = "F Critical (α=0.05)",
+      DF1 = "DF Proposed",
+      DF2 = "DF Legacy",
+      Decision = "Variance Comparison") %>%
+    fontsize(size = 11, part = "all") %>%
+    align(align = "center", part = "all") %>%
+    autofit()}
+
+
+# Regular dotplot by Serial / Day
+# --------------------------------
+basic_dotplot <- function(data, y_var, assay_name) {
+  plot_title <- paste0("Individual Value Plot of Replicate\n", assay_name, " Titers by Serial-Day")
+  ggplot(data, aes(x = Serial_Day, y = !!sym(y_var), color = antiserum)) +
+    geom_jitter(
+      position = position_jitterdodge(
+        jitter.width = 0.15,    # horizontal jitter within the dodge
+        dodge.width = 0.3,      # horizontal offset between groups
+        jitter.height = 0),     # no vertical jitter
+      size = 2, alpha = 0.8) +
+    stat_summary(
+      fun = mean, geom = "crossbar", width = 1,
+      position = position_dodge(width = 0.3)) +
+    scale_color_manual(
+      values = c("proposed" = "#B22222", "legacy" = "#2C7BB6"),
+      labels = c("proposed" = "Proposed Pool", "legacy" = "Legacy Pool"),
+      name = "Antiserum") +
+    labs(title = plot_title, x = "Serial / Day", y = "Titer (Log10FAID50/mL)") +
+    theme_bw() +
+    theme(
+      legend.position = "bottom",
+      legend.box = "vertical",
+      plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
+      panel.grid.major.x = element_line(color = "gray80", linetype = "dotted"))}
+
+
+# Dotplot by Serial / Day and Operator
+# ------------------------------------
+dotplot_operator <- function(data, y_var, assay_name) {
+  plot_title <- paste0("Individual Value Plot of Replicate\n", assay_name, 
+                       " Titers by Serial-Day and Operator")
+  ggplot(data, aes(x = Serial_Day, y = !!sym(y_var),
+                   color = interaction(operator, antiserum),
+    shape = operator)) +
+    geom_jitter(
+      position = position_jitterdodge(
+        jitter.width = 0.15,
+        dodge.width = 0.3,
+        jitter.height = 0),
+      size = 2, alpha = 0.8) +
+    stat_summary(
+      fun = mean, geom = "crossbar", width = 2,
+      position = position_dodge(width = 0.3)) +
+    scale_color_manual(
+      values = c(
+        "1.proposed" = "#B22222",
+        "1.legacy"   = "#2C7BB6",
+        "2.proposed" = "#D95F02",
+        "2.legacy"   = "#1B9E77"),
+      labels = c(
+        "1.proposed" = "Operator 1 - Proposed",
+        "1.legacy"   = "Operator 1 - Legacy",
+        "2.proposed" = "Operator 2 - Proposed",
+        "2.legacy"   = "Operator 2 - Legacy"),
+      name = "Operator / Antiserum") +
+    labs(title = plot_title, x = "Serial / Day", y = "Titer (Log10FAID50/mL)",
+      shape = "Operator") +
+    guides(color = guide_legend(nrow = 2, byrow = FALSE)) +
+    theme_bw() +
+    theme(
+      legend.position = "bottom",
+      legend.box = "vertical",
+      plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
+      panel.grid.major.x = element_line(color = "gray80", linetype = "dotted"))}
+
+
+# Dotplot by Serial / Day and Test Day (1-24)
+# -------------------------------------------
+dotplot_testday <- function(data, y_var, assay_name) {
+  plot_title <- paste0("Individual Value Plot of Replicate\n", assay_name, 
+                       " Titers by Serial-Day and Test Day")
+  ggplot(data, aes(x = Serial_Day, y = !!sym(y_var), color = factor(testday),
+    shape = antiserum)) +
+    geom_jitter(
+      position = position_jitter(width = 0.15, height = 0),
+      size = 2, alpha = 0.8) +
+    geom_text(aes(label = testday),
+              position = position_jitter(width = 0.15, height = 0),
+              vjust = -0.7, size = 3, show.legend = FALSE) +
+    scale_color_viridis_d(
+      name = "Test Day (1–24)",
+      option = "turbo") +
+    scale_shape_manual(
+      values = c("proposed" = 16, "legacy" = 17),
+      labels = c("proposed" = "Proposed", "legacy" = "Legacy"),
+      name = "Antiserum") +
+    labs(title = plot_title, x = "Serial / Day", y = "Titer (Log10FAID50/mL)") +
+    guides(color = guide_legend(ncol = 6)) +
+    theme_bw() +
+    theme(
+      legend.position = "bottom",
+      legend.box = "vertical",
+      plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
+      panel.grid.major.x = element_line(color = "gray80", linetype = "dotted"))}
+
+```
+
+
+```{r run}
+
+bvdv1_antiserum <- antiserum_variance_analysis(bvdv1_data, "BVD1_titer")
+bvdv1_serial_antiserum <- serum_antiserum_variance_analysis(bvdv1_data,"BVD1_titer")
+bvdv1_ftest <- F_test_table(bvdv1_data, bvdv1_serial_antiserum, "BVD1_titer")
+
+bvdv2_antiserum <- antiserum_variance_analysis(bvdv2_data, "BVD2_titer")
+bvdv2_serial_antiserum <- serum_antiserum_variance_analysis(bvdv2_data,"BVD2_titer")
+bvdv2_ftest <- F_test_table(bvdv2_data, bvdv2_serial_antiserum, "BVD2_titer")
+
+```
+
+# BVDV1
+
+<br>
+
+```{r BVDV1 var table compiled}
+
+format_variance_components_table(bvdv1_antiserum, "antiserum")
+
+```
+
+<br>
+
+```{r BVDV1 var table}
+
+format_variance_components_table(bvdv1_serial_antiserum, "serial_antiserum")
+
+```
+
+<br>
+
+```{r BVDV1 F table}
+
+format_F_table(bvdv1_ftest)
+
+```
+
+\pagebreak
+
+```{r BVDV1 dotplot, fig.width=7, fig.height=6}
+
+basic_dotplot(bvdv1_data, y_var = "BVD1_titer", assay_name = "BVD1")
+
+```
+
+<br>
+
+```{r BVDV1 boxplot by operator, fig.width=7, fig.height=6}
+
+dotplot_operator(bvdv1_data, y_var = "BVD1_titer", assay_name = "BVD1")
+
+```
+
+<br>
+
+```{r BVDV1 boxplot by testday, fig.width=7, fig.height=6}
+
+dotplot_testday(bvdv1_data, y_var = "BVD1_titer", assay_name = "BVD1")
+
+```
+
+\pagebreak
+
+# BVDV2
+
+<br>
+
+```{r BVDV2 var table antiserum}
+
+format_variance_components_table(bvdv2_antiserum, "antiserum")
+
+```
+
+<br>
+
+```{r BVDV2 var table serial antiserum}
+
+format_variance_components_table(bvdv2_serial_antiserum, "serial_antiserum")
+
+```
+
+<br>
+
+```{r BVDV2 F table}
+
+format_F_table(bvdv2_ftest)
+
+```
+
+\pagebreak
+
+```{r BVDV2 dotplot, fig.width=7, fig.height=6}
+
+basic_dotplot(bvdv2_data, y_var = "BVD2_titer", assay_name = "BVD2")
+
+```
+
+<br>
+
+```{r BVDV2 boxplot by operator, fig.width=7, fig.height=6}
+
+dotplot_operator(bvdv2_data, y_var = "BVD2_titer", assay_name = "BVD2")
+
+```
+
+<br>
+
+```{r BVDV2 boxplot by testday, fig.width=7, fig.height=6}
+
+dotplot_testday(bvdv2_data, y_var = "BVD2_titer", assay_name = "BVD2")
+
+```
