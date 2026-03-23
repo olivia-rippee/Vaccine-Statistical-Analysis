@@ -268,11 +268,11 @@ create_flextable <- function(summary_table, caption = "Outcome Presence",
 # Boxplot for duration
 # ---------------------
 create_duration_boxplot <- function(data_individual, group_col, duration_col,
-                                    title = "Outcome Duration") {
+                                    title = "Outcome Duration", xlim_vals = NULL) {
   group_col    <- enquo(group_col)
   duration_col <- enquo(duration_col)
 
-  ggplot(data_individual, aes(y = !!group_col, x = !!duration_col, fill = !!group_col)) +
+  plot <- ggplot(data_individual, aes(y = !!group_col, x = !!duration_col, fill = !!group_col)) +
     geom_boxplot(width = 0.6) +
     geom_dotplot(binaxis = "x", stackdir = "center", dotsize = 0.4, binwidth = 0.4, color = "black", fill = "black") +
     theme_minimal() +
@@ -285,7 +285,12 @@ create_duration_boxplot <- function(data_individual, group_col, duration_col,
     theme(
       legend.position = "none",
       plot.title = element_text(face = "bold", size = 12, hjust = 0.5),
-      plot.subtitle = element_text(size = 10))}
+      plot.subtitle = element_text(size = 10))
+  
+    if (!is.null(xlim_vals) && length(xlim_vals) == 2) {
+    plot <- plot + xlim(xlim_vals[1], xlim_vals[2])}
+  
+  return(plot)}
 
 
 # Titer incidence
@@ -502,7 +507,7 @@ create_flextable(pyrexia_mf_table, caption = "Pyrexia Duration Results")
 
 ```{r pyrexia duration boxplot}
 
-create_duration_boxplot(data_individual, Group, Pyrexia_Duration, title = "Pyrexia Shedding Duration")
+create_duration_boxplot(data_individual, Group, Pyrexia_Duration, xlim_vals = c(0, 10), title = "Pyrexia Shedding Duration")
 
 ```
 
