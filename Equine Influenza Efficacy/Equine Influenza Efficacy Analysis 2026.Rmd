@@ -18,27 +18,10 @@ library(ggplot2)
 library(ggbreak)
 ```
 
-```{r functions}
-
-# P-value formatting function
-format_p <- function(p) {
-  if (is.na(p)) return(NA_character_)
-  if (p < 0.0001) {
-    output <- "< 0.0001"
-  } else {output <- sprintf("%.4f", p)}}
-
-# 5-number summary formatting function
-format_integer <- function(x) {
-  ifelse(x %% 1 == 0,
-    formatC(x, format = "f", digits = 0),
-    formatC(x, format = "f", digits = 2))}
-
-```
-
 
 ```{r data}
 
-data_2026 <- read.csv("your_efficacy_repeated_data.csv")
+data_2026 <- read.csv("efficacy_data.csv")
 colnames(data_2026) <- gsub("\\.", "_", colnames(data_2026)) 
 
 data_2026 <- data_2026 %>% 
@@ -53,12 +36,10 @@ data_2026 <- data_2026 %>%
     VI_PCR = case_when(
       VI_PCR == "Pos" ~ "Pos", VI_PCR == "Neg" ~ "Neg", VI_PCR == "Suspect" ~ "Neg", TRUE~NA),
     
-    
     # Treatment Groups
     # -----------------
     Group = case_when(Group == 1 ~ "IVP", Group == 2 ~ "Control"),
  
-    
     # Discharge
     # ---------
     Discharge_Status = case_when(
@@ -68,7 +49,6 @@ data_2026 <- data_2026 %>%
       Discharge_Status == "Yes" & Day >= DOC ~ "Yes",
       TRUE~"No"),
     Discharge_Presence_Overall = if_else(any(Discharge_After_DOC == "Yes"), "Yes", "No"),
-    
     
     # Discharge Duration
     # ------------------
@@ -83,7 +63,6 @@ data_2026 <- data_2026 %>%
     Discharge_Duration = ifelse(
       !is.na(Discharge_Start_Day) & !is.na(Discharge_End_Day),
       Discharge_End_Day - Discharge_Start_Day + 1, 0),
-    
     
     # Shedding Duration (PCR)
     # -----------------------
@@ -103,8 +82,7 @@ data_2026 <- data_2026 %>%
     Pyrexia_After_DOC = case_when(
       Pyrexia_Status == "Yes" & Day >= DOC ~ "Yes", TRUE~"No"),
     Pyrexia_Presence_Overall = if_else(any(Pyrexia_After_DOC == "Yes"), "Yes", "No"),
-    
-    
+
     # Pyrexia Duration
     # ----------------
     Pyrexia_Start_Day = {   # first positive day after DOC (or NA if none)
@@ -115,7 +93,6 @@ data_2026 <- data_2026 %>%
       if(length(pos_days) > 0) max(pos_days) else NA_real_},
     Pyrexia_Duration = ifelse(!is.na(Pyrexia_Start_Day) & !is.na(Pyrexia_End_Day),
                       Pyrexia_End_Day - Pyrexia_Start_Day + 1,  0),
-    
     
     # Titer Data
     # -----------
@@ -149,64 +126,272 @@ data_individual$Group <- factor(data_individual$Group, levels = c("Control", "IV
 
 ```
 
+```{r functions}
+
+# P-value formatting
+# -------------------
+format_p <- function(p) {
+  if (is.na(p)) return(NA_character_)
+  if (p < 0.0001) {
+    output <- "< 0.0001"
+  } else {output <- sprintf("%.4f", p)}}
+
+
+# 5-number summary formatting
+# ----------------------------
+format_integer <- function(x) {
+  ifelse(x %% 1 == 0,
+    formatC(x, format = "f", digits = 0),
+    formatC(x, format = "f", digits = 2))}
+
+
+# Prevented fraction
+# -------------------
+prevented_fraction <- function(data_individual, group_col, outcome_col) {
+  group_col   <- enquo(group_col)
+  outcome_col <- enquo(outcome_col)
+
+  # Calculate counts and proportions
+  summary_counts <- data_individual %>%
+    group_by(!!group_col) %>%
+    summarize(
+      Positive = sum(!!outcome_col == "Yes"),
+      Total = n(),
+      Prop = Positive / Total,
+      .groups = "drop")
+
+  # Create 2x2 contingency table
+  ct <- table(pull(data_individual, !!group_col),
+              pull(data_individual, !!outcome_col))
+
+  # Relative risk with bootstrap CI
+  RR_result <- riskratio(ct, method = "boot", )
+
+  RR_estimate <- RR_result$measure[, "estimate"]
+  RR_lower    <- RR_result$measure[, "lower"]
+  RR_upper    <- RR_result$measure[, "upper"]
+  fisher_p    <- RR_result$p.value[, "fisher.exact"]
+
+  # Extract IVP prevented fraction (assuming IVP is 2nd row)
+  PF_ivp        <- 1 - RR_estimate[2]
+  Lower_CI_ivp  <- 1 - RR_upper[2]
+
+  # Create final summary table
+  summary_table <- summary_counts %>%
+    mutate(Group = factor(!!group_col, levels = c("IVP", "Control"))) %>%
+    arrange(Group) %>%
+    mutate(
+      `Treatment Group` = ifelse(Group == "IVP", "1 = IVP", "2 = Control"),
+      `Proportion of Positive Cases` =
+        paste0(Positive, " / ", Total, " = ", sprintf("%.2f", Prop)),
+      `Prevented Fraction` =
+        ifelse(Group == "IVP", sprintf("%.2f", PF_ivp), ""),
+      `Lower 95% Confidence Bound` =
+        ifelse(Group == "IVP", sprintf("%.2f", Lower_CI_ivp), ""),
+      `Fisher Exact p-value` = ifelse(Group == "IVP", format_p(fisher_p[2]), "")) %>%
+    select(
+      `Treatment Group`,
+      `Proportion of Positive Cases`,
+      `Prevented Fraction`,
+      `Lower 95% Confidence Bound`,
+      `Fisher Exact p-value`)
+
+  return(summary_table)}
+
+
+# Five number summary
+# -------------------
+five_num_summary <- function(data_individual, group_col, duration_col,
+                             caption = "Outcome Five-Number Summary") {
+
+  group_col    <- enquo(group_col)
+  duration_col <- enquo(duration_col)
+
+  summary_table_5num <- data_individual %>%
+    mutate(Group = factor(!!group_col, levels = c("IVP", "Control"))) %>%
+    group_by(Group) %>%
+    summarize(
+      n = n(),
+      Minimum = min(!!duration_col, na.rm = TRUE),
+      `25th Percentile` = quantile(!!duration_col, 0.25, na.rm = TRUE),
+      Median = median(!!duration_col, na.rm = TRUE),
+      `75th Percentile` = quantile(!!duration_col, 0.75, na.rm = TRUE),
+      Maximum = max(!!duration_col, na.rm = TRUE),
+      .groups = "drop") %>%
+    rename(
+      `25th\nPercentile` = `25th Percentile`,
+      `75th\nPercentile` = `75th Percentile`) %>%
+    mutate(`Treatment Group` = ifelse(Group == "IVP", "1 = IVP", "2 = Control")) %>%
+    select(`Treatment Group`, n:Maximum) %>%
+    mutate(across(2:7, ~ format_integer(.x)))}
+
+
+# Mitigated fraction
+# -------------------
+mitigated_fraction <- function(data_individual, group_col, duration_col,
+                               compare = c("Control", "IVP"), seed = 1234) {
+  group_col    <- enquo(group_col)
+  duration_col <- enquo(duration_col)
+
+  # Create formula dynamically
+  formula_obj <- as.formula(
+    paste0(quo_name(duration_col), " ~ ", quo_name(group_col)))
+
+  # Calculate mitigated fraction
+  mf_boot <- MFBoot(formula_obj, data_individual, compare = compare, seed = seed)
+
+  # Calculate Wilcoxon Rank Sum p-value
+  test <- wilcox.test(formula_obj, data_individual)
+  p_value <- test$p.value
+
+  # MF, 95% lower bound, and p-value
+  summary_table_mf <- tibble(
+    `Mitigated Fraction` = round(mf_boot$stat[1,1], 2),
+    `Lower 95% Confidence Bound` = round(mf_boot$stat[1,3], 2),
+    `Wilcoxon Rank Sum p-value` = format_p(p_value))
+
+  return(summary_table_mf)}
+
+
+# Create flextable output
+# ------------------------
+create_flextable <- function(summary_table, caption = "Outcome Presence",
+                             font_size = 11) {
+  flextable(summary_table) %>%
+    set_caption(caption) %>%
+    autofit() %>%
+    align(align = "center", part = "all") %>%
+    fit_to_width(max_width = 7) %>% 
+    fontsize(size = font_size, part = "all")}
+
+
+# Boxplot for duration
+# ---------------------
+create_duration_boxplot <- function(data_individual, group_col, duration_col,
+                                    title = "Outcome Duration") {
+  group_col    <- enquo(group_col)
+  duration_col <- enquo(duration_col)
+
+  ggplot(data_individual, aes(y = !!group_col, x = !!duration_col, fill = !!group_col)) +
+    geom_boxplot(width = 0.6) +
+    geom_dotplot(binaxis = "x", stackdir = "center", dotsize = 0.4, binwidth = 0.4, color = "black", fill = "black") +
+    theme_minimal() +
+    labs(title = title,
+      #subtitle = paste0(
+      #  "Mitigated Fraction = ", round(mf_boot$stat[1,1], 2),
+      #  ", Lower 95% CI = ", round(mf_boot$stat[1,3], 2),
+      #  ", p = ", format_p(p_value, 6)),
+      x = "Duration (Days)", y = "Treatment Group") +
+    theme(
+      legend.position = "none",
+      plot.title = element_text(face = "bold", size = 12, hjust = 0.5),
+      plot.subtitle = element_text(size = 10))}
+
+
+# Titer incidence
+# ----------------
+titer_incidence <- function(data_2026, group_col, titer_col, day_col,
+                            threshold = 2, days_keep = c(0, 21, 35, 42, 49)) {
+  group_col <- enquo(group_col)
+  titer_col <- enquo(titer_col)
+  day_col   <- enquo(day_col)
+
+  data_titer_incidence <- data_2026 %>%
+    filter(!is.na(!!titer_col)) %>%
+    mutate(
+      Pos = ifelse(!!titer_col > threshold, 1, 0),
+      Group = factor(!!group_col, levels = c("IVP", "Control")),
+      Day = factor(!!day_col))
+
+  data_titer_incidence_5day <- data_titer_incidence %>%
+    filter(Day %in% days_keep) %>%
+    mutate(
+      Day = recode(as.character(Day), "35" = "35 (DOC)"),
+      Day = factor(Day, levels = c("0", "21", "35 (DOC)", "42", "49")))
+
+  titer_incidence_table <- data_titer_incidence_5day %>%
+    group_by(Group, Day) %>%
+    summarize(
+      Positive_n = sum(Pos, na.rm = TRUE),
+      Total = n(),
+      Prop_Positive = Positive_n / Total,
+      .groups = "drop") %>%
+    mutate(Display = paste0(
+      Positive_n, " / ", Total, " = ",
+      sprintf("%.2f", Prop_Positive)))
+
+  titer_incidence_wide <- titer_incidence_table %>%
+    select(Group, Day, Display) %>%
+    pivot_wider(names_from = Day, values_from = Display) %>%
+    arrange(Group) %>%
+    mutate(`Treatment Group` = ifelse(Group == "IVP", "1 = IVP", "2 = Control")) %>%
+    select(`Treatment Group`, `0`, `21`, `35 (DOC)`, `42`, `49`)
+
+  fisher_pvalues <- data_titer_incidence_5day %>%
+    group_by(Day) %>%
+    summarize(
+      p_value = {
+        tab <- table(Group, Pos)
+        if (all(dim(tab) == c(2, 2))) {
+          fisher.test(tab)$p.value
+        } else {NA_real_}}, .groups = "drop") %>%
+    mutate(p_value = sapply(p_value, format_p)) %>%
+    pivot_wider(names_from = Day,
+                values_from = p_value)
+
+  fisher_pvalues <- fisher_pvalues %>%
+    mutate(`Treatment Group` = "Fisher Exact p-value") %>%
+    select(`Treatment Group`, `0`, `21`, `35 (DOC)`, `42`, `49`)
+
+  final_table <- bind_rows(titer_incidence_wide, fisher_pvalues)
+
+  return(final_table)}
+
+
+# Boxplot for titer 
+# ------------------
+create_titer_boxplot <- function(data, group_col, titer_col, day_col,
+                                 title = "Virus Titers",
+                                 y_label = "HAI Titer",
+                                 x_label = "Treatment Group",
+                                 days_keep = c(0, 21, 35, 42, 49),
+                                 y_break = c(100, 350)) {
+
+  group_col <- enquo(group_col)
+  titer_col <- enquo(titer_col)
+  day_col   <- enquo(day_col)
+
+  # Prepare 5-day subset
+  plot_data <- data %>%
+    filter(!is.na(!!titer_col)) %>%
+    filter(!!day_col %in% days_keep) %>%
+    mutate(
+      Day = recode(as.character(!!day_col), "35" = "35 (DOC)"),
+      Day = factor(Day, levels = c("0", "21", "35 (DOC)", "42", "49")),
+      Group = factor(!!group_col, levels = c("IVP", "Control")))
+
+  ggplot(plot_data, aes(x = Group, y = !!titer_col, fill = fct_rev(Group))) +
+    geom_boxplot() +
+    facet_wrap(~ Day, nrow = 1) +
+    scale_y_break(y_break) +
+    labs(title = title,
+         y = y_label,
+         x = x_label) +
+    theme(legend.position = "none",
+          plot.title = element_text(face = "bold", size = 12, hjust = 0.5),
+          plot.subtitle = element_text(size = 10))}
+
+```
+
 # Presence of Disease (Nasal or Ocular Discharge)
 
 <br>
 
 ```{r presence discharge}
 
-# Calculate counts and proportions
-# ---------------------------------
-summary_counts <- data_individual %>%
-  group_by(Group) %>%
-  summarize(
-    Positive = sum(Discharge_Presence_Overall == "Yes"),
-    Total = n(),
-    Prop = Positive / Total,
-    .groups = "drop")
+discharge_pf_table <- prevented_fraction(data_individual, group_col=Group, outcome_col=Discharge_Presence_Overall)
 
-# Create 2x2 contingency table
-ct <- table(data_individual$Group, data_individual$Discharge_Presence_Overall)
-
-# Relative risk with bootstrap CI
-RR_result <- riskratio(ct, method = "boot", )
-
-RR_estimate <- RR_result$measure[, "estimate"]
-RR_lower    <- RR_result$measure[, "lower"]
-RR_upper    <- RR_result$measure[, "upper"]
-fisher_p    <- RR_result$p.value[, "fisher.exact"]
-
-# Extract IVP prevented fraction (assuming IVP is 2nd row)
-PF_ivp        <- 1 - RR_estimate[2]
-Lower_CI_ivp  <- 1 - RR_upper[2]
-
-# Create final summary table
-summary_table <- summary_counts %>%
-  mutate(Group = factor(Group, levels = c("IVP", "Control"))) %>%
-  arrange(Group) %>%
-  mutate(
-    `Treatment Group` = ifelse(Group == "IVP", "1 = IVP", "2 = Control"),
-    `Proportion of Positive Cases` =
-      paste0(Positive, " / ", Total, " = ", sprintf("%.2f", Prop)),
-    `Prevented Fraction` =
-      ifelse(Group == "IVP", sprintf("%.2f", PF_ivp), ""),
-    `Lower 95% Confidence Bound` =
-      ifelse(Group == "IVP", sprintf("%.2f", Lower_CI_ivp), ""),
-    `Fisher Exact p-value` = ifelse(Group == "IVP", format_p(fisher_p[2]), "")) %>%
-  select(
-    `Treatment Group`,
-    `Proportion of Positive Cases`,
-    `Prevented Fraction`,
-    `Lower 95% Confidence Bound`,
-    `Fisher Exact p-value`)
-
-# Create flextable
-flextable(summary_table) %>%
-  set_caption("Clinical Disease Presence") %>%
-  autofit() %>%
-  align(align = "center", part = "all") %>%
-  fit_to_width(max_width = 7) %>% 
-  fontsize(size = 11, part = "all")
+create_flextable(discharge_pf_table, caption = "Clinical Disease Presence")
 
 ```
 
@@ -218,32 +403,9 @@ flextable(summary_table) %>%
 
 ```{r duration discharge}
 
-# 5 number summary
-# -------------------
-summary_table_5num <- data_individual %>%
-  mutate(Group = factor(Group, levels = c("IVP", "Control"))) %>%
-  group_by(Group) %>%
-  summarize(
-    n = n(),
-    Minimum = min(Discharge_Duration, na.rm = TRUE),
-    `25th Percentile` = quantile(Discharge_Duration, 0.25, na.rm = TRUE),
-    Median = median(Discharge_Duration, na.rm = TRUE),
-    `75th Percentile` = quantile(Discharge_Duration, 0.75, na.rm = TRUE),
-    Maximum = max(Discharge_Duration, na.rm = TRUE),
-    .groups = "drop") %>%
-  rename(
-    `25th\nPercentile` = `25th Percentile`,
-    `75th\nPercentile` = `75th Percentile`) %>%
-  mutate(`Treatment Group` = ifelse(Group == "IVP", "1 = IVP", "2 = Control")) %>%
-  select(`Treatment Group`, n:Maximum) %>%
-  mutate(across(2:7, ~ format_integer(.x)))
+discharge_table_5num <- five_num_summary(data_individual, Group, Discharge_Duration)
 
-flextable(summary_table_5num) %>%
-  set_caption("Clinical Disease Duration Five-Number Summary") %>%
-  autofit() %>%
-  align(align = "center", part = "all") %>%
-  fit_to_width(max_width = 7) %>% 
-  fontsize(size = 11, part = "all")
+create_flextable(discharge_table_5num, caption = "Clinical Disease Duration Five-Number Summary")
 
 ```
 
@@ -252,30 +414,9 @@ flextable(summary_table_5num) %>%
 
 ```{r duration discharge mf}
 
-# Calculate mitigated fraction
-# -----------------------------
-mf_boot <- MFBoot('Discharge_Duration ~ Group', data_individual, compare = c("Control", "IVP"), seed = 1234)
+discharge_mf_table <- mitigated_fraction(data_individual, Group, Discharge_Duration)
 
-
-# Calculate Wilcoxon Rank Sum p-value
-# ------------------------------------
-test <- wilcox.test(Discharge_Duration ~ Group, data_individual)
-p_value <- test$p.value
-
-
-# MF, 95% lower bound, and p-value
-# ---------------------------------
-summary_table_mf <- tibble(
-  `Mitigated Fraction` = round(mf_boot$stat[1,1], 2),
-  `Lower 95% Confidence Bound` = round(mf_boot$stat[1,3], 2),
-  `Wilcoxon Rank Sum p-value` = format_p(p_value))
-
-flextable(summary_table_mf) %>%
-  set_caption("Clinical Disease Duration Results") %>%
-  autofit() %>%
-  align(align = "center", part = "all") %>%
-  fit_to_width(max_width = 7) %>% 
-  fontsize(size = 11, part = "all")
+create_flextable(discharge_mf_table, caption = "Clinical Disease Duration Results")
 
 ```
 
@@ -283,21 +424,7 @@ flextable(summary_table_mf) %>%
 
 ```{r duration discharge boxplot}
 
-ggplot(data_individual, aes(y = Group, x = Discharge_Duration, fill = Group)) +
-  geom_boxplot(width = 0.6) +
-  geom_dotplot(binaxis = "x", stackdir = "center", dotsize = 0.4, binwidth = 0.4, color = "black", fill = "black") +
-  theme_minimal() +
-  labs(
-    title = "Clinical Disease Duration",
-    #subtitle = paste0(
-    #  "Mitigated Fraction = ", round(mf_boot$stat[1,1], 2),
-    #  ", Lower 95% CI = ", round(mf_boot$stat[1,3], 2),
-    #  ", p = ", format_p(p_value, 6)),
-    x = "Duration (Days)", y = "Treatment Group") +
-  theme(
-    legend.position = "none",
-    plot.title = element_text(face = "bold", size = 12, hjust = 0.5),
-    plot.subtitle = element_text(size = 10))
+create_duration_boxplot(data_individual, Group, Discharge_Duration, title = "Clinical Disease Duration")
 
 ```
 
@@ -309,63 +436,19 @@ ggplot(data_individual, aes(y = Group, x = Discharge_Duration, fill = Group)) +
 
 ```{r duration shedding}
 
-# 5 number summary
-# -------------------
-summary_table_5num <- data_individual %>%
-  mutate(Group = factor(Group, levels = c("IVP", "Control"))) %>%
-  group_by(Group) %>%
-  summarize(
-    n = n(),
-    Minimum = min(Shedding_Duration, na.rm = TRUE),
-    `25th Percentile` = quantile(Shedding_Duration, 0.25, na.rm = TRUE),
-    Median = median(Shedding_Duration, na.rm = TRUE),
-    `75th Percentile` = quantile(Shedding_Duration, 0.75, na.rm = TRUE),
-    Maximum = max(Shedding_Duration, na.rm = TRUE),
-    .groups = "drop") %>%
-  rename(
-    `25th\nPercentile` = `25th Percentile`,
-    `75th\nPercentile` = `75th Percentile`) %>%
-  mutate(`Treatment Group` = ifelse(Group == "IVP", "1 = IVP", "2 = Control")) %>%
-  select(`Treatment Group`, n:Maximum) %>%
-  mutate(across(2:7, ~ format_integer(.x)))
+shedding_table_5num <- five_num_summary(data_individual, Group, Discharge_Duration)
 
-flextable(summary_table_5num) %>%
-  set_caption("Viral Shedding Duration Five-Number Summary") %>%
-  autofit() %>%
-  align(align = "center", part = "all") %>%
-  fit_to_width(max_width = 7) %>% 
-  fontsize(size = 11, part = "all")
+create_flextable(shedding_table_5num, caption = "Viral Shedding Duration Five-Number Summary")
 
 ```
 
 <br>
 
-```{r duration mf}
+```{r duration shedding mf}
 
-# Mitigated fraction
-# -----------------------------
-mf_boot <- MFBoot('Shedding_Duration ~ Group', data_individual, compare = c("Control", "IVP"), seed=1234)
+shedding_mf_table <- mitigated_fraction(data_individual, Group, Shedding_Duration)
 
-
-# Wilcoxon Rank Sum p-value
-# -------------------
-test <- wilcox.test(Shedding_Duration ~ Group, data_individual)
-p_value <- test$p.value
-
-
-# MF, 95% lower bound, and p-value
-# ---------------------------------
-summary_table_mf <- tibble(
-  `Mitigated Fraction` = round(mf_boot$stat[1,1], 2),
-  `Lower 95% Confidence Bound` = round(mf_boot$stat[1,3], 2),
-  `Wilcoxon Rank Sum p-value` = format_p(p_value))
-
-flextable(summary_table_mf) %>%
-  set_caption("Viral Shedding Duration Results") %>%
-  autofit() %>%
-  align(align = "center", part = "all") %>%
-  fit_to_width(max_width = 7) %>% 
-  fontsize(size = 11, part = "all")
+create_flextable(shedding_mf_table, caption = "Viral Shedding Duration Results")
 
 ```
 
@@ -373,20 +456,7 @@ flextable(summary_table_mf) %>%
 
 ```{r duration shedding boxplot}
 
-ggplot(data_individual, aes(y = Group, x = Shedding_Duration, fill = Group)) +
-  geom_boxplot(width = 0.6) +
-  geom_dotplot(binaxis = "x", stackdir = "center", dotsize = 0.4, binwidth = 0.4, color = "black",fill = "black") +
-  theme_minimal() +
-  labs(
-    title = "Viral Shedding Duration",
-    #subtitle = paste0(
-    #  "Mitigated Fraction = ", round(mf_boot$stat[1,1], 2),
-    #  ", Lower 95% CI = ", round(mf_boot$stat[1,3], 2),
-    #  ", p = ", format_p(p_value)),
-    x = "Duration (Days)", y = "Treatment Group") +
-  theme(legend.position = "none",
-    plot.title = element_text(face = "bold", size = 12, hjust = 0.5),
-    plot.subtitle = element_text(size = 10))
+create_duration_boxplot(data_individual, Group, Shedding_Duration, title = "Viral Shedding Duration")
 
 ```
 
@@ -398,59 +468,9 @@ ggplot(data_individual, aes(y = Group, x = Shedding_Duration, fill = Group)) +
 
 ```{r pyrexia presence}
 
-# Calculate counts and proportions
-# ---------------------------------
-summary_counts <- data_individual %>%
-  group_by(Group) %>%
-  summarize(
-    Positive = sum(Pyrexia_Presence_Overall == "Yes"),
-    Total = n(),
-    Prop = Positive / Total,
-    .groups = "drop")
+pyrexia_pf_table <- prevented_fraction(data_individual, Group, Pyrexia_Presence_Overall)
 
-
-# Create 2x2 contingency table
-ct <- table(data_individual$Group, data_individual$Pyrexia_Presence_Overall)
-
-# Relative risk with bootstrap CI
-RR_result <- riskratio(ct, method = "boot")
-
-RR_estimate <- RR_result$measure[, "estimate"]
-RR_lower    <- RR_result$measure[, "lower"]
-RR_upper    <- RR_result$measure[, "upper"]
-fisher_p    <- RR_result$p.value[, "fisher.exact"]
-
-# Extract IVP prevented fraction (assuming IVP is 2nd row)
-PF_ivp        <- 1 - RR_estimate[2]
-Lower_CI_ivp  <- 1 - RR_upper[2]
-
-# Create final summary table
-summary_table <- summary_counts %>%
-  mutate(Group = factor(Group, levels = c("IVP", "Control"))) %>%
-  arrange(Group) %>%
-  mutate(
-    `Treatment Group` = ifelse(Group == "IVP", "1 = IVP", "2 = Control"),
-    `Proportion of Positive Cases` =
-      paste0(Positive, " / ", Total, " = ", sprintf("%.2f", Prop)),
-    `Prevented Fraction` =
-      ifelse(Group == "IVP", sprintf("%.2f", PF_ivp), ""),
-    `Lower 95% Confidence Bound` =
-      ifelse(Group == "IVP", sprintf("%.2f", Lower_CI_ivp), ""),
-    `Fisher Exact p-value` = ifelse(Group == "IVP", format_p(fisher_p[2]), "")) %>%
-  select(
-    `Treatment Group`,
-    `Proportion of Positive Cases`,
-    `Prevented Fraction`,
-    `Lower 95% Confidence Bound`,
-    `Fisher Exact p-value`)
-
-# Create flextable
-flextable(summary_table) %>%
-  set_caption("Pyrexia Presence") %>%
-  autofit() %>%
-  align(align = "center", part = "all") %>%
-  fit_to_width(max_width = 7)  %>% 
-  fontsize(size = 11, part = "all")
+create_flextable(pyrexia_pf_table, caption = "Pyrexia Presence")
 
 ```
 
@@ -462,32 +482,9 @@ flextable(summary_table) %>%
 
 ```{r pyrexia duration}
 
-# 5 number summary
-# -------------------
-summary_table_5num <- data_individual %>%
-  mutate(Group = factor(Group, levels = c("IVP", "Control"))) %>%
-  group_by(Group) %>%
-  summarize(
-    n = n(),
-    Minimum = min(Pyrexia_Duration, na.rm = TRUE),
-    `25th Percentile` = quantile(Pyrexia_Duration, 0.25, na.rm = TRUE),
-    Median = median(Pyrexia_Duration, na.rm = TRUE),
-    `75th Percentile` = quantile(Pyrexia_Duration, 0.75, na.rm = TRUE),
-    Maximum = max(Pyrexia_Duration, na.rm = TRUE),
-    .groups = "drop") %>%
-  rename(
-    `25th\nPercentile` = `25th Percentile`,
-    `75th\nPercentile` = `75th Percentile`) %>%
-  mutate(`Treatment Group` = ifelse(Group == "IVP", "1 = IVP", "2 = Control")) %>%
-  select(`Treatment Group`, n:Maximum) %>%
-  mutate(across(2:7, ~ format_integer(.x)))
+pyrexia_table_5num <- five_num_summary(data_individual, Group, Pyrexia_Duration)
 
-flextable(summary_table_5num) %>%
-  set_caption("Pyrexia Duration Five-Number Summary") %>%
-  autofit() %>%
-  align(align = "center", part = "all") %>%
-  fit_to_width(max_width = 7) %>% 
-  fontsize(size = 11, part = "all")
+create_flextable(pyrexia_table_5num, caption = "Pyrexia Duration Five-Number Summary")
 
 ```
 
@@ -495,31 +492,9 @@ flextable(summary_table_5num) %>%
 
 ```{r pyrexia duration mf}
 
+pyrexia_mf_table <- mitigated_fraction(data_individual, Group, Pyrexia_Duration)
 
-# Mitigated fraction
-# -------------------
-mf_boot <- MFBoot('Pyrexia_Duration ~ Group', data_individual, compare = c("Control", "IVP"))
-
-
-# Wilcoxon Rank Sum p-value
-# --------------------------
-test <- wilcox.test(Pyrexia_Duration ~ Group, data_individual)
-p_value <- test$p.value
-
-
-# MF, 95% lower bound, and p-value
-# ---------------------------------
-summary_table_mf <- tibble(
-  `Mitigated Fraction` = round(mf_boot$stat[1,1], 2),
-  `Lower 95% Confidence Bound` = round(mf_boot$stat[1,3], 2),
-  `Wilcoxon Rank Sum p-value` = format_p(p_value))
-
-flextable(summary_table_mf) %>%
-  set_caption("Pyrexia Duration Results") %>%
-  autofit() %>%
-  align(align = "center", part = "all") %>%
-  fit_to_width(max_width = 7) %>% 
-  fontsize(size = 11, part = "all")
+create_flextable(pyrexia_mf_table, caption = "Pyrexia Duration Results")
 
 ```
 
@@ -527,24 +502,7 @@ flextable(summary_table_mf) %>%
 
 ```{r pyrexia duration boxplot}
 
-ggplot(data_individual, aes(y = Group, x = Pyrexia_Duration, fill = Group)) +
-  geom_boxplot(width = 0.6) +
-  geom_dotplot(binaxis = "x", stackdir = "center", dotsize = 0.4, binwidth = 0.4, color = "black",fill = "black") +
-  theme_minimal() +
-  labs(
-    title = "Pyrexia Duration",
-    #subtitle = paste0(
-    #  "Mitigated Fraction = ", round(mf_boot$stat[1,1], 2),
-    #  ", Lower 95% CI = ", round(mf_boot$stat[1,3], 2)),
-    #  ", p = ", format_p(p_value)),
-    x = "Duration (Days)", y = "Treatment Group") +
-  scale_x_continuous(
-    limits = c(0, 10),
-    breaks = seq(0, 10, by = 2)) +
-  theme(
-    legend.position = "none",
-    plot.title = element_text(face = "bold", size = 12, hjust = 0.5),
-    plot.subtitle = element_text(size = 10))
+create_duration_boxplot(data_individual, Group, Pyrexia_Duration, title = "Pyrexia Shedding Duration")
 
 ```
 
@@ -556,61 +514,9 @@ ggplot(data_individual, aes(y = Group, x = Pyrexia_Duration, fill = Group)) +
 
 ```{r HAI titer Kentucky}
 
-data_2026_KY_titer_incidence <- data_2026 %>%
-  filter(!is.na(HAI_Kentucky)) %>%
-  mutate(
-    Kentucky_Pos = ifelse(HAI_Kentucky > 2, 1, 0),
-    Group = factor(Group, levels = c("IVP", "Control")),
-    Day = factor(Day))
+KY_titer_incidence <- titer_incidence(data_2026, Group, HAI_Kentucky, Day)
 
-data_2026_KY_titer_incidence_5day <- data_2026_KY_titer_incidence %>%
-  filter(Day %in% c(0, 21, 35, 42, 49)) %>%
-  mutate(
-    Day = recode(as.character(Day), "35" = "35 (DOC)"),
-    Day = factor(Day, levels = c("0", "21", "35 (DOC)", "42", "49")))
-
-KY_titer_incidence_table <- data_2026_KY_titer_incidence_5day %>%
-  group_by(Group, Day) %>%
-  summarize(
-    Positive_n = sum(Kentucky_Pos, na.rm = TRUE),
-    Total = n(),
-    Prop_Positive = Positive_n / Total,
-    .groups = "drop") %>%
-  mutate(Display = paste0(
-    Positive_n, " / ", Total, " = ",
-    sprintf("%.2f", Prop_Positive)))
-
-KY_titer_incidence_wide <- KY_titer_incidence_table %>%
-  select(Group, Day, Display) %>%
-  pivot_wider(names_from = Day, values_from = Display) %>%
-  arrange(Group) %>%
-  mutate(`Treatment Group` = ifelse(Group == "IVP", "1 = IVP", "2 = Control")) %>%
-  select(`Treatment Group`, `0`, `21`, `35 (DOC)`, `42`, `49`)
-
-fisher_pvalues <- data_2026_KY_titer_incidence_5day %>%
-  group_by(Day) %>%
-  summarize(
-    p_value = {
-      tab <- table(Group, Kentucky_Pos)
-      if (all(dim(tab) == c(2, 2))) {
-        fisher.test(tab)$p.value
-      } else {NA_real_}}, .groups = "drop") %>%
-  mutate(p_value = sapply(p_value, format_p)) %>%
-  pivot_wider(names_from = Day,
-              values_from = p_value)
-
-fisher_pvalues <- fisher_pvalues %>%
-  mutate(`Treatment Group` = "Fisher Exact p-value") %>%
-  select(`Treatment Group`, `0`, `21`, `35 (DOC)`, `42`, `49`)
-
-KY_final_table <- bind_rows(KY_titer_incidence_wide, fisher_pvalues)
-
-flextable(KY_final_table) %>%
-  set_caption("Kentucky Virus HAI Titer Incidence") %>%
-  autofit() %>%
-  align(align = "center", part = "all") %>%
-  fit_to_width(max_width = 7) %>% 
-  fontsize(size = 10, part = "all")
+create_flextable(KY_titer_incidence, caption = "Kentucky Virus HAI Titer Incidence", font_size = 10)
 
 ```
 
@@ -618,17 +524,7 @@ flextable(KY_final_table) %>%
 
 ```{r HAI titer Kentucky boxplot, fig.width=7}
 
-ggplot(data_2026_KY_titer_incidence_5day ,
-       aes(x = Group, y = HAI_Kentucky, fill = fct_rev(Group))) +
-  geom_boxplot() +
-  facet_wrap(~ Day, nrow = 1) +
-  scale_y_break(c(100, 350)) +
-  labs(title = "Kentucky Virus HAI Titers",
-       y = "Kentucky HAI Titer",
-       x = "Treatment Group") +
-  theme(legend.position = "none",
-    plot.title = element_text(face = "bold", size = 12, hjust = 0.5),
-    plot.subtitle = element_text(size = 10))
+create_titer_boxplot(data_2026, Group, HAI_Kentucky, Day)
 
 ```
 
@@ -640,61 +536,9 @@ ggplot(data_2026_KY_titer_incidence_5day ,
 
 ```{r HAI titer Richmond}
 
-data_2026_RM_titer_incidence <- data_2026 %>%
-  filter(!is.na(HAI_Richmond)) %>%
-  mutate(
-    Richmond_Pos = ifelse(HAI_Richmond > 2, 1, 0),
-    Group = factor(Group, levels = c("IVP", "Control")),
-    Day = factor(Day) )
+RM_titer_incidence <- titer_incidence(data_2026, Group, HAI_Richmond, Day)
 
-data_2026_RM_titer_incidence_5day <- data_2026_RM_titer_incidence %>%
-  filter(Day %in% c(0, 21, 35, 42, 49)) %>%
-  mutate(
-    Day = recode(as.character(Day), "35" = "35 (DOC)"),
-    Day = factor(Day, levels = c("0", "21", "35 (DOC)", "42", "49")))
-
-RM_titer_incidence_table <- data_2026_RM_titer_incidence_5day %>%
-  group_by(Group, Day) %>%
-  summarize(
-    Positive_n = sum(Richmond_Pos, na.rm = TRUE),
-    Total = n(),
-    Prop_Positive = Positive_n / Total,
-    .groups = "drop") %>%
-  mutate(Display = paste0(
-    Positive_n, " / ", Total, " = ",
-    sprintf("%.2f", Prop_Positive)))
-
-RM_titer_incidence_wide <- RM_titer_incidence_table %>%
-  select(Group, Day, Display) %>%
-  pivot_wider(names_from = Day, values_from = Display) %>%
-  arrange(Group) %>%
-  mutate(`Treatment Group` = ifelse(Group == "IVP", "1 = IVP", "2 = Control")) %>%
-  select(`Treatment Group`, `0`, `21`, `35 (DOC)`, `42`, `49`)
-
-fisher_pvalues <- data_2026_RM_titer_incidence_5day %>%
-  group_by(Day) %>%
-  summarize(
-    p_value = {
-      tab <- table(Group, Richmond_Pos)
-      if (all(dim(tab) == c(2, 2))) {
-        fisher.test(tab)$p.value
-      } else {NA_real_}}, .groups = "drop") %>%
-  mutate(p_value = sapply(p_value, format_p)) %>%
-  pivot_wider(names_from = Day,
-              values_from = p_value)
-
-fisher_pvalues <- fisher_pvalues %>%
-  mutate(`Treatment Group` = "Fisher Exact p-value") %>%
-  select(`Treatment Group`, `0`, `21`, `35 (DOC)`, `42`, `49`)
-
-RM_final_table <- bind_rows(RM_titer_incidence_wide, fisher_pvalues)
-
-flextable(RM_final_table) %>%
-  set_caption("Richmond Virus HAI Titer Incidence") %>%
-  autofit() %>%
-  align(align = "center", part = "all") %>%
-  fit_to_width(max_width = 7) %>% 
-  fontsize(size = 10, part = "all")
+create_flextable(RM_titer_incidence, caption = "Richmond Virus HAI Titer Incidence", font_size = 10)
 
 ```
 
@@ -702,16 +546,6 @@ flextable(RM_final_table) %>%
 
 ```{r HAI titer Richmond boxplot, fig.width=7}
 
-ggplot(data_2026_RM_titer_incidence_5day,
-       aes(x = Group, y = HAI_Richmond, fill = fct_rev(Group))) +
-  geom_boxplot() +
-  facet_wrap(~ Day, nrow = 1) +
-  scale_y_break(c(100, 350)) +
-  labs(title = "Richmond Virus HAI Titers",
-       y = "Richmond HAI Titer",
-       x = "Treatment Group") +
-  theme(legend.position = "none",
-    plot.title = element_text(face = "bold", size = 12, hjust = 0.5),
-    plot.subtitle = element_text(size = 10))
+create_titer_boxplot(data_2026, Group, HAI_Richmond, Day)
 
 ```
