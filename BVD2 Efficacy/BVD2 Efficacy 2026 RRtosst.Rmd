@@ -1,0 +1,177 @@
+---
+title: "BVD2 Efficacy"
+author: "Olivia Rippee"
+date: "`r Sys.Date()`"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE)
+
+library(tidyverse)
+library(readxl)
+# devtools::install_github("ABS-dev/PF")
+library(PF)
+library(flextable)
+```
+
+```{r data}
+
+file_path <- "efficacy_data.xlsx"
+
+all_sheets_list <- file_path %>%
+  excel_sheets() %>%
+  set_names() %>%
+  map(~ read_excel(path = file_path, sheet = .x))
+
+invisible(list2env(all_sheets_list, envir = .GlobalEnv))  # Map sheets to R dataframes
+
+# Clean dataframes
+# -----------------
+Mortality <- Mortality %>%
+  mutate(Group = recode(Group, `1` = "Control", `2` = "Vaccine")) %>%
+  mutate(Group = factor(Group, levels = c("Control", "Vaccine")))
+
+Leukopenia <- Leukopenia %>%
+  rename_with(~ gsub(" ", "_", .)) %>%
+  mutate(Group = recode(Group, `1` = "Control", `2` = "Vaccine")) %>%
+  mutate(Group = factor(Group, levels = c("Control", "Vaccine")))
+
+# CS Note: yes = any clinical event greater than or equal to 2 with or without fever 
+# (fever does not need to occur with clinical signs)
+
+ClinicalSigns <- na.omit(`CS with or without Fever`) %>%
+  rename_with(~ gsub(" ", "_", .)) %>%
+  mutate(Group = recode(Group, `1` = "Control", `2` = "Vaccine")) %>%
+  mutate(Group = factor(Group, levels = c("Control", "Vaccine")))
+
+```
+
+
+```{r fxn}
+
+# P-value formatting function
+# ----------------------------
+format_p <- function(p) {
+  if (is.na(p)) return(NA_character_)
+  if (p < 0.0001) {
+    output <- "< 0.0001"
+  } else {output <- sprintf("%.4f", p)}}
+
+
+# 5-number summary formatting function
+# -------------------------------------
+format_integer <- function(x) {
+  ifelse(x %% 1 == 0,
+    formatC(x, format = "f", digits = 0),
+    formatC(x, format = "f", digits = 2))}
+
+
+# Prevented fraction analysis
+#-----------------------------
+run_prevented_fraction_analysis <- function(data, outcome_var, label_col_name) {
+  outcome_sym <- sym(outcome_var)
+  
+  # Summarize counts and proportions
+  summary_counts <- data %>%
+    group_by(Group) %>%
+    summarize(
+      Positive = sum(toupper(!!outcome_sym) == "YES"),
+      Total    = n(),
+      Prop     = Positive / Total,
+      .groups = "drop")
+  
+  # 2x2 contingency table
+  ct <- table(data$Group, toupper(data[[outcome_var]]))
+  
+  # Exact Prevented Fraction using RRtosst()
+  # Input: c(y1, n1, y2, n2) where y = positives, n = totals
+  # Group order: Vaccine (exposed) vs Control (unexposed)
+  rr_exact <- RRtosst(
+    c(
+      ct["Vaccine", "YES"], sum(ct["Vaccine", ]),
+      ct["Control", "YES"], sum(ct["Control", ])),
+    pf = TRUE)
+  
+  PF_vac       <- rr_exact$estimate["PF"]
+  Lower_CI_vac <- rr_exact$estimate["LL"]
+  Upper_CI_vac <- rr_exact$estimate["UL"]
+  
+  # Fisher Exact test p-value
+  fisher_p <- fisher.test(ct)$p.value
+  
+  # Build summary table
+  summary_table <- summary_counts %>%
+    arrange(Group) %>%
+    mutate(
+      `Treatment Group` = ifelse(Group == "Control", "1 = Control", "2 = Vaccine"),
+      !!label_col_name :=
+        paste0(Positive, " / ", Total, " = ", sprintf("%.2f", Prop)),
+      `Prevented Fraction` =
+        ifelse(Group == "Control", sprintf("%.2f", PF_vac), ""),
+      `Lower 95% Confidence Bound` =
+        ifelse(Group == "Control", sprintf("%.2f", Lower_CI_vac), ""),
+      `Fisher Exact p-value` =
+        ifelse(Group == "Control", format.pval(fisher_p, digits = 3), "")) %>%
+    select(
+      `Treatment Group`,
+      !!label_col_name,
+      `Prevented Fraction`,
+      `Lower 95% Confidence Bound`,
+      `Fisher Exact p-value`)
+  
+  return(summary_table)}
+
+
+# Format flextable
+#-------------------
+format_flextable <- function(summary_table, caption_text) {
+  flextable(summary_table) %>%
+    set_caption(caption_text) %>%
+    autofit() %>%
+    align(align = "center", part = "all") %>%
+    fit_to_width(max_width = 7) %>%
+    fontsize(size = 11, part = "all")}
+
+```
+
+# Mortality
+
+```{r mortality}
+
+mortality_table <- run_prevented_fraction_analysis(
+  data = Mortality, outcome_var = "Mortality", 
+  label_col_name = "Proportion of Mortality")
+
+format_flextable(mortality_table, "Incidence of Mortality")
+
+```
+
+<br>
+
+# Leukopenia
+
+```{r leukopenia}
+
+leukopenia_table <- run_prevented_fraction_analysis(
+  data = Leukopenia, outcome_var = "Leukopenia", 
+  label_col_name = "Proportion of Positive Cases")
+
+format_flextable(leukopenia_table, "Incidence of Leukopenia")
+
+```
+
+<br>
+
+# Clinical Signs with or without Fever
+
+```{r clinical signs}
+
+clinical_table <- run_prevented_fraction_analysis(
+  data = ClinicalSigns, outcome_var = "Clinical_Signs_of_BVD2", 
+  label_col_name = "Proportion of Positive Cases")
+
+format_flextable(clinical_table, 
+                 "Incidence of Clinical Signs (with or without fever)")
+
+```
