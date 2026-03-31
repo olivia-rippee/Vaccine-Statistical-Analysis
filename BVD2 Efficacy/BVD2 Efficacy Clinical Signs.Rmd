@@ -1,0 +1,156 @@
+---
+title: "BVD2 Efficacy Clinical Signs"
+author: "Olivia Rippee"
+date: "`r Sys.Date()`"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE)
+
+library(tidyverse)
+library(flextable)
+
+```
+
+```{r data}
+
+data_repeated <- read.csv("Efficacy_repeated.csv")
+
+data_individual <- read.csv("Efficacy_individual.csv")
+
+```
+
+```{r}
+
+data <- data_repeated %>%
+  left_join(data_individual %>% select(animalID, group), by = "animalID") %>%
+  relocate(group, .after = animalID) %>%
+  mutate(group = case_when(
+    group == 1 ~ "Control",
+    group == 2 ~ "Vaccine",
+    TRUE ~ as.character(group)))
+
+clinical_signs_cols <- c("attitude", "reseff", "nasaldschrg", "oculardschrg",
+  "nasalulcers", "oralulcers", "diarrhea", "cough")
+
+data[clinical_signs_cols] <- lapply(data[clinical_signs_cols], as.numeric)
+
+```
+
+```{r}
+
+# Flag animals as clinically affected if they had >= 2 clinical signs on any day
+data_CS <- data %>%
+  mutate(affected_today = rowSums(across(all_of(clinical_signs_cols), ~ . >= 2), na.rm = TRUE) >= 1) %>%
+  group_by(animalID, group) %>%
+  summarize(clinically_affected = any(affected_today), .groups = "drop") %>%
+  filter(clinically_affected) %>%
+  arrange(animalID)
+
+```
+
+<br>
+
+```{r}
+
+group_counts <- data_CS %>% count(group)
+
+flextable(group_counts) %>%
+  set_caption("Number of Clinically Affected Horses by Group") 
+
+```
+
+<br>
+
+```{r}
+
+animalIDs_by_group <- data_CS %>%
+  group_by(group) %>%
+  summarize(animalIDs = paste(animalID, collapse = ", "), .groups = "drop") %>%
+  arrange(group)
+
+flextable(animalIDs_by_group) %>%
+  set_caption("Animal IDs of Clinically Affected Horses by Group") %>%
+  width(j = 1, width = 0.72) %>%
+  width(j = 2, width = 3.85) 
+
+```
+
+<br>
+
+```{r vaccinate_clinical_summary}
+
+vaccinate_data <- data %>% filter(group == "Vaccine")
+
+# Count number of clinical signs ≥2 per animal per day
+vaccinate_daily <- vaccinate_data %>%
+  rowwise() %>%
+  mutate(n_signs = sum(c_across(all_of(clinical_signs_cols)) >= 2, na.rm = TRUE)) %>%
+  ungroup() %>%
+  filter(n_signs >= 1) %>%
+  select(animalID, group, day, all_of(clinical_signs_cols)) %>%
+  arrange(animalID, day)
+
+# Convert daily signs to TRUE/FALSE (≥2)
+vaccinate_daily_signs <- vaccinate_daily %>%
+  mutate(across(all_of(clinical_signs_cols), ~ . >= 2))
+
+# Summarize by animal
+vaccinate_summary <- vaccinate_daily_signs %>%
+  group_by(animalID, group) %>%
+  summarize(
+    `Days Affected` = n(),
+    `Clinical Signs Observed` = paste(
+      names(which(colSums(across(all_of(clinical_signs_cols))) > 0)),
+      collapse = ", "),
+    .groups = "drop") %>%
+  filter(`Days Affected` > 0) %>%
+  rename(`Animal ID` = animalID, `Group` = group) %>%
+  arrange(`Animal ID`)
+
+flextable(vaccinate_summary) %>%
+  set_caption("Summary of Clinically Affected Vaccinated Animals") %>%
+  autofit() %>%
+  align(j = 1:3, align = "center", part = "all")
+
+```
+
+\pagebreak
+
+```{r control_clinical_summary}
+
+control_data <- data %>% filter(group == "Control")
+
+# Count number of clinical signs ≥2 per animal per day
+control_daily <- control_data %>%
+  rowwise() %>%
+  mutate(n_signs = sum(c_across(all_of(clinical_signs_cols)) >= 2, na.rm = TRUE)) %>%
+  ungroup() %>%
+  filter(n_signs >= 1) %>%
+  select(animalID, group, day, all_of(clinical_signs_cols)) %>%
+  arrange(animalID, day)
+
+# Convert daily signs to TRUE/FALSE (≥2)
+control_daily_signs <- control_daily %>%
+  mutate(across(all_of(clinical_signs_cols), ~ . >= 2))
+
+# Summarize by animal
+control_summary <- control_daily_signs %>%
+  group_by(animalID, group) %>%
+  summarize(
+    `Days Affected` = n(),
+    `Clinical Signs Observed` = paste(
+      names(which(colSums(across(all_of(clinical_signs_cols))) > 0)),
+      collapse = ", "),
+    .groups = "drop") %>%
+  filter(`Days Affected` > 0) %>%
+  rename(`Animal ID` = animalID, `Group` = group) %>%
+  arrange(`Animal ID`)
+
+flextable(control_summary) %>%
+  set_caption("Summary of Clinically Affected Control Animals") %>%
+  autofit() %>%
+  align(j = 1:3, align = "center", part = "all")
+
+```
