@@ -45,6 +45,14 @@ ClinicalSigns <- na.omit(`CS with or without Fever`) %>%
   mutate(Group = recode(Group, `1` = "Control", `2` = "Vaccine")) %>%
   mutate(Group = factor(Group, levels = c("Control", "Vaccine")))
 
+# Stringent data
+# ----------------
+ClinicalSigns_stringent <- read_xlsx("C:/Users/ORippee/OneDrive - Kemin Industries/R&D - Olivia/R Code/Stats/BVD2 Efficacy/Data/BVD2 response - Stringent classification vacc and controls stats table.xlsx", sheet=3)
+
+ClinicalSigns_stringent <- ClinicalSigns_stringent %>%
+  rename_with(~ gsub(" ", "_", .)) %>%
+  mutate(Group = if_else(Group == "Vaccinate", "Vaccine", Group))
+
 ```
 
 
@@ -173,5 +181,20 @@ clinical_table <- run_prevented_fraction_analysis(
 
 format_flextable(clinical_table, 
                  "Incidence of Clinical Signs (with or without fever)")
+
+```
+
+<br>
+
+# Clinical Signs (Stringent Criteria)
+
+```{r clinical signs stringent}
+
+clinical_table_stringent <- run_prevented_fraction_analysis(
+  data = ClinicalSigns_stringent, outcome_var = "BVD_Case_Stringent_Criteria", 
+  label_col_name = "Proportion of Positive Cases")
+
+format_flextable(clinical_table_stringent, 
+                 "Incidence of Clinical Signs (Stringent Criteria)")
 
 ```
